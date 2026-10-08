@@ -48,7 +48,7 @@ export default {
               role: "user",
               parts: [{ text: message.slice(0, 2000) }]
             }],
-            generationConfig: { maxOutputTokens: 300 }
+            generationConfig: { maxOutputTokens: 1000 }
           })
         }
       );

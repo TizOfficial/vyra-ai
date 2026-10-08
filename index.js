@@ -55,12 +55,13 @@ export default {
       const result = await response.json();
 
       if (!response.ok) {
-        console.error("Gemini API Fehler:", response.status, result);
-        return json({
-          success: false,
-          error: "Gemini API Fehler",
-          status: response.status
-        }, 502);
+  console.error("Gemini API Fehler:", response.status, result);
+
+  return json({
+    success: false,
+    error: result.error?.message || "Unbekannter Gemini-Fehler",
+    status: response.status
+  }, 502);
       }
 
       const reply = result.candidates?.[0]?.content?.parts
@@ -76,15 +77,13 @@ export default {
       }
 
       return json({ success: true, reply });
-    } catch (error) {
-      console.error("Worker Fehler:", error);
+} catch (error) {
+  console.error("Worker Fehler:", error);
 
-      return json({
-        success: false,
-        error: error.name === "TimeoutError"
-          ? "Gemini hat zu lange gebraucht"
-          : "Interner Worker-Fehler"
-      }, 502);
+  return json({
+    success: false,
+    error: error.message || "Unbekannter Worker-Fehler"
+  }, 500);
     }
   }
 };

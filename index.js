@@ -3,33 +3,66 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
+    // Browser- und Verbindungstest
+    if (request.method === "GET" && url.pathname === "/") {
+      return json({
+        success: true,
+        reply: "VYRA AI Worker läuft!",
+        endpoint: "/chat"
+      });
+    }
+
+    // Nur der Chat-Endpunkt verarbeitet KI-Anfragen
     if (url.pathname !== "/chat") {
-      return json({ success: false, error: "Route nicht gefunden" }, 404);
+      return json({
+        success: false,
+        error: "Route nicht gefunden."
+      }, 404);
     }
 
     if (request.method !== "POST") {
-      return json({ success: false, error: "POST erforderlich" }, 405);
+      return json({
+        success: false,
+        error: "Bitte POST verwenden."
+      }, 405);
     }
 
     if (!env.GEMINI_API_KEY) {
-      return json({ success: false, error: "API-Key fehlt" }, 500);
+      return json({
+        success: false,
+        error: "GEMINI_API_KEY fehlt in Cloudflare."
+      }, 500);
     }
 
     try {
       const form = await request.formData();
+
       const message = form.get("message");
       const prompt = form.get("prompt");
 
       if (typeof message !== "string" || !message.trim()) {
-        return json({ success: false, error: "Nachricht fehlt" }, 400);
+        return json({
+          success: false,
+          error: "Das Feld message fehlt."
+        }, 400);
       }
 
       if (typeof prompt !== "string" || !prompt.trim()) {
-        return json({ success: false, error: "Prompt fehlt" }, 400);
+        return json({
+          success: false,
+          error: "Das Feld prompt fehlt."
+        }, 400);
       }
 
-      const response = await fetch(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+      if (message.length > 2000 || prompt.length > 5000) {
+        return json({
+          success: false,
+          error: "Die Nachricht oder der Prompt ist zu lang."
+        }, 400);
+      }
+
+      const geminiResponse = await fetch(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
         {
           method: "POST",
           headers: {
@@ -38,52 +71,84 @@ export default {
           },
           body: JSON.stringify({
             systemInstruction: {
-              parts: [{ text: prompt.slice(0, 5000) }]
+              parts: [{ text: prompt.trim() }]
             },
             contents: [{
               role: "user",
-              parts: [{ text: message.slice(0, 1500) }]
+              parts: [{ text: message.trim() }]
             }],
             generationConfig: {
               maxOutputTokens: 250
             }
-          }),
-          signal: AbortSignal.timeout(12000)
+          })
         }
       );
 
-      const result = await response.json();
+      const rawResponse = await geminiResponse.text();
 
-      if (!response.ok) {
-  console.error("Gemini API Fehler:", response.status, result);
+      let data;
 
-  return json({
-    success: false,
-    error: result.error?.message || "Unbekannter Gemini-Fehler",
-    status: response.status
-  }, 502);
+      try {
+        data = JSON.parse(rawResponse);
+      } catch {
+        console.error(
+          "Gemini lieferte ungültiges JSON. HTTP:",
+          geminiResponse.status
+        );
+
+        return json({
+          success: false,
+          error: "Ungültige Antwort von Gemini."
+        }, 502);
       }
 
-      const reply = result.candidates?.[0]?.content?.parts
+      if (!geminiResponse.ok) {
+        console.error(
+          "Gemini API Fehler:",
+          geminiResponse.status,
+          data.error?.message || "Keine Fehlerbeschreibung"
+        );
+
+        return json({
+          success: false,
+          error: data.error?.message || "Gemini-Anfrage fehlgeschlagen.",
+          status: geminiResponse.status
+        }, 502);
+      }
+
+      const reply = data.candidates?.[0]?.content?.parts
         ?.map(part => part.text || "")
         .join("")
         .trim();
 
       if (!reply) {
+        console.error(
+          "Gemini lieferte keinen Antworttext.",
+          data.promptFeedback || data.candidates
+        );
+
         return json({
           success: false,
-          error: "Gemini hat keinen Antworttext geliefert"
+          error: "Gemini hat keinen Antworttext geliefert."
         }, 502);
       }
 
-      return json({ success: true, reply });
-} catch (error) {
-  console.error("Worker Fehler:", error);
+      return json({
+        success: true,
+        reply: reply
+      });
 
-  return json({
-    success: false,
-    error: error.message || "Unbekannter Worker-Fehler"
-  }, 500);
+    } catch (error) {
+      console.error(
+        "Worker-Fehler:",
+        error?.name || "Error",
+        error?.message || "Unbekannter Fehler"
+      );
+
+      return json({
+        success: false,
+        error: "Der Worker konnte die Anfrage nicht verarbeiten."
+      }, 500);
     }
   }
 };
@@ -92,7 +157,8 @@ function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
-      "Content-Type": "application/json; charset=UTF-8"
+      "Content-Type": "application/json; charset=UTF-8",
+      "Cache-Control": "no-store"
     }
   });
 }

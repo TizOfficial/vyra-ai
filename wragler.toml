@@ -5,3 +5,7 @@ compatibility_date = "2026-10-08"
 
 [ai]
 binding = "AI"
+
+[observability.logs]
+enabled = false
+invocation_logs = true

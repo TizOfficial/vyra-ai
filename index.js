@@ -3,55 +3,33 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // Nur /chat erlauben
     if (url.pathname !== "/chat") {
-      return json({ success: false, error: "Route nicht gefunden." }, 404);
+      return json({ success: false, error: "Route nicht gefunden" }, 404);
     }
 
-    // Nur POST erlauben
     if (request.method !== "POST") {
-      return json({ success: false, error: "POST erforderlich." }, 405);
+      return json({ success: false, error: "POST erforderlich" }, 405);
     }
 
-    // API-Key prüfen
     if (!env.GEMINI_API_KEY) {
-      return json({
-        success: false,
-        error: "GEMINI_API_KEY fehlt in Cloudflare."
-      }, 500);
+      return json({ success: false, error: "API-Key fehlt" }, 500);
     }
 
     try {
-      // Formulardaten von BDFD lesen
       const form = await request.formData();
-
       const message = form.get("message");
       const prompt = form.get("prompt");
 
       if (typeof message !== "string" || !message.trim()) {
-        return json({
-          success: false,
-          error: "Die Nachricht fehlt."
-        }, 400);
+        return json({ success: false, error: "Nachricht fehlt" }, 400);
       }
 
       if (typeof prompt !== "string" || !prompt.trim()) {
-        return json({
-          success: false,
-          error: "Der System-Prompt fehlt."
-        }, 400);
+        return json({ success: false, error: "Prompt fehlt" }, 400);
       }
 
-      if (message.length > 2000 || prompt.length > 5000) {
-        return json({
-          success: false,
-          error: "Nachricht oder Prompt ist zu lang."
-        }, 400);
-      }
-
-      // Anfrage an Gemini senden
       const response = await fetch(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
         {
           method: "POST",
           headers: {
@@ -60,28 +38,27 @@ export default {
           },
           body: JSON.stringify({
             systemInstruction: {
-              parts: [{ text: prompt.trim() }]
+              parts: [{ text: prompt.slice(0, 5000) }]
             },
             contents: [{
               role: "user",
-              parts: [{ text: message.trim() }]
+              parts: [{ text: message.slice(0, 1500) }]
             }],
             generationConfig: {
-              maxOutputTokens: 800
+              maxOutputTokens: 250
             }
-          })
+          }),
+          signal: AbortSignal.timeout(12000)
         }
       );
 
-      // Gemini-Antwort lesen
       const result = await response.json();
 
       if (!response.ok) {
-        console.error("Gemini API Fehler:", result);
-
+        console.error("Gemini API Fehler:", response.status, result);
         return json({
           success: false,
-          error: "Gemini API Anfrage fehlgeschlagen.",
+          error: "Gemini API Fehler",
           status: response.status
         }, 502);
       }
@@ -94,28 +71,24 @@ export default {
       if (!reply) {
         return json({
           success: false,
-          error: "Gemini hat keinen Antworttext geliefert."
+          error: "Gemini hat keinen Antworttext geliefert"
         }, 502);
       }
 
-      // Antwort an BDFD zurückgeben
-      return json({
-        success: true,
-        reply: reply
-      });
-
+      return json({ success: true, reply });
     } catch (error) {
       console.error("Worker Fehler:", error);
 
       return json({
         success: false,
-        error: "Interner Worker-Fehler."
-      }, 500);
+        error: error.name === "TimeoutError"
+          ? "Gemini hat zu lange gebraucht"
+          : "Interner Worker-Fehler"
+      }, 502);
     }
   }
 };
 
-// JSON-Antwort senden
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,

@@ -1,140 +1,82 @@
 
 export default {
   async fetch(request, env) {
-    const corsHeaders = {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-    };
-
-    const json = (data, status = 200) =>
-      new Response(JSON.stringify(data), {
-        status,
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "application/json; charset=utf-8",
-        },
-      });
-
-    if (request.method === "OPTIONS") {
-      return new Response(null, { headers: corsHeaders });
-    }
-
-    const url = new URL(request.url);
-
-    if (url.pathname === "/" && request.method === "GET") {
-      return json({
-        success: true,
-        service: "VYRA AI",
-        provider: "OpenRouter",
-      });
-    }
-
-    if (url.pathname !== "/chat") {
-      return json({ success: false, error: "Endpoint not found" }, 404);
-    }
+    const headers = { "Content-Type": "text/plain; charset=utf-8" };
 
     if (request.method !== "POST") {
-      return json({ success: false, error: "Use POST" }, 405);
+      return new Response("Method not allowed", {
+        status: 405,
+        headers
+      });
     }
 
-    if (!env.OPENROUTER_API_KEY) {
-      return json({
-        success: false,
-        error: "OpenRouter API key is not configured",
-      }, 500);
+    if (request.headers.get("Authorization") !== `Bearer ${env.WORKER_SECRET}`) {
+      return new Response("Unauthorized", { status: 401, headers });
     }
 
     try {
-      const form = await request.formData();
-      const message = String(form.get("message") || "").trim();
-      const prompt = String(form.get("prompt") || "").trim();
+      const prompt = (await request.text()).trim();
 
-      if (!message) {
-        return json({
-          success: false,
-          error: "Message is required",
-        }, 400);
-      }
-
-      if (message.length > 4000 || prompt.length > 4000) {
-        return json({
-          success: false,
-          error: "Message or prompt is too long",
-        }, 400);
-      }
-
-      const messages = [];
-
-      if (prompt) {
-        messages.push({
-          role: "system",
-          content: prompt,
-        });
-      } else {
-        messages.push({
-          role: "system",
-          content:
-            "You are VYRA AI, a helpful, friendly Discord assistant. Answer clearly and naturally.",
+      if (!prompt) {
+        return new Response("Please enter a question.", {
+          status: 400,
+          headers
         });
       }
 
-      messages.push({
-        role: "user",
-        content: message,
-      });
+      if (prompt.length > 2000) {
+        return new Response("Question too long.", {
+          status: 400,
+          headers
+        });
+      }
 
       const response = await fetch(
         "https://openrouter.ai/api/v1/chat/completions",
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-            "Content-Type": "application/json",
-            "X-OpenRouter-Title": "VYRA AI",
+            "Authorization": `Bearer ${env.OPENROUTER_API_KEY}`,
+            "Content-Type": "application/json"
           },
           body: JSON.stringify({
             model: "openrouter/free",
-            messages,
-            max_tokens: 500,
-            temperature: 0.7,
-          }),
+            messages: [
+              {
+                role: "system",
+                content: "You are VYRA AI, a friendly Discord assistant. Answer in the user's language."
+              },
+              { role: "user", content: prompt }
+            ],
+            max_tokens: 500
+          })
         }
       );
 
       const data = await response.json();
 
       if (!response.ok) {
-        console.error("OpenRouter error:", response.status, data);
-
-        return json({
-          success: false,
-          error: data?.error?.message || `OpenRouter HTTP ${response.status}`,
-        }, 502);
+        return new Response(
+          `OpenRouter error (${response.status}): ${data.error?.message || "Unknown error"}`,
+          { status: 502, headers }
+        );
       }
 
-      const reply = data?.choices?.[0]?.message?.content;
+      const answer = data.choices?.[0]?.message?.content;
 
-      if (typeof reply !== "string" || !reply.trim()) {
-        return json({
-          success: false,
-          error: "The AI returned an empty response",
-        }, 502);
+      if (!answer) {
+        return new Response("No AI response received.", {
+          status: 502,
+          headers
+        });
       }
 
-      return json({
-        success: true,
-        reply: reply.trim(),
-        model: data.model || "openrouter/free",
-        usage: data.usage || null,
-      });
+      return new Response(answer, { status: 200, headers });
     } catch (error) {
-      console.error("VYRA Worker error:", error);
-
-      return json({
-        success: false,
-        error: "The AI request failed. Please try again.",
-      }, 500);
+      return new Response("Worker error: " + error.message, {
+        status: 500,
+        headers
+      });
     }
-  },
+  }
 };

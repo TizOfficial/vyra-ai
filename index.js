@@ -1,17 +1,26 @@
 
 export default {
   async fetch(request, env) {
-    const headers = { "Content-Type": "text/plain; charset=utf-8" };
+    const headers = {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store"
+    };
 
     if (request.method !== "POST") {
-      return new Response("Method not allowed", {
+      return new Response("Use POST", {
         status: 405,
         headers
       });
     }
 
-    if (request.headers.get("Authorization") !== `Bearer ${env.WORKER_SECRET}`) {
-      return new Response("Unauthorized", { status: 401, headers });
+    if (
+      !env.WORKER_SECRET ||
+      request.headers.get("Authorization") !== `Bearer ${env.WORKER_SECRET}`
+    ) {
+      return new Response("Unauthorized", {
+        status: 401,
+        headers
+      });
     }
 
     try {
@@ -25,55 +34,66 @@ export default {
       }
 
       if (prompt.length > 2000) {
-        return new Response("Question too long.", {
+        return new Response("Maximum prompt length is 2000 characters.", {
           status: 400,
           headers
         });
       }
 
-      const response = await fetch(
+      const apiResponse = await fetch(
         "https://openrouter.ai/api/v1/chat/completions",
         {
           method: "POST",
           headers: {
             "Authorization": `Bearer ${env.OPENROUTER_API_KEY}`,
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "X-OpenRouter-Title": "VYRA AI"
           },
           body: JSON.stringify({
             model: "openrouter/free",
             messages: [
               {
                 role: "system",
-                content: "You are VYRA AI, a friendly Discord assistant. Answer in the user's language."
+                content:
+                  "You are VYRA AI, a friendly Discord AI assistant. Answer in the same language as the user. Be helpful, clear and concise."
               },
-              { role: "user", content: prompt }
+              {
+                role: "user",
+                content: prompt
+              }
             ],
             max_tokens: 500
           })
         }
       );
 
-      const data = await response.json();
+      const data = await apiResponse.json();
 
-      if (!response.ok) {
-        return new Response(
-          `OpenRouter error (${response.status}): ${data.error?.message || "Unknown error"}`,
-          { status: 502, headers }
-        );
+      if (!apiResponse.ok) {
+  return new Response(
+    `OpenRouter HTTP ${apiResponse.status}: ${JSON.stringify(data)}`,
+    {
+      status: 200,
+      headers
+    }
+  );
       }
 
       const answer = data.choices?.[0]?.message?.content;
 
-      if (!answer) {
-        return new Response("No AI response received.", {
+      if (typeof answer !== "string" || !answer.trim()) {
+        return new Response("The AI returned no text.", {
           status: 502,
           headers
         });
       }
 
-      return new Response(answer, { status: 200, headers });
-    } catch (error) {
-      return new Response("Worker error: " + error.message, {
+      return new Response(answer.trim().slice(0, 4000), {
+        status: 200,
+        headers
+      });
+    } catch {
+      return new Response("Worker request failed.", {
         status: 500,
         headers
       });
